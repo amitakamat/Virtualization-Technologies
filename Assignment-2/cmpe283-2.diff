@@ -1,0 +1,50 @@
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 0099e10..c7de2bf 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -27,6 +27,11 @@
+ #include "trace.h"
+ #include "pmu.h"
+ 
++/*
++ * Flag to toggle the functionality to return fake vendor_id
++ */
++int flag_change_cpuinfo = 0;
++
+ static u32 xstate_required_size(u64 xstate_bv, bool compacted)
+ {
+ 	int feature_bit = 0;
+@@ -890,14 +895,32 @@ EXPORT_SYMBOL_GPL(kvm_cpuid);
+ 
+ int kvm_emulate_cpuid(struct kvm_vcpu *vcpu)
+ {
+-	u32 eax, ebx, ecx, edx;
++	u32 eax, ebx, ecx, edx, init_eax_val;
+ 
+ 	if (cpuid_fault_enabled(vcpu) && !kvm_require_cpl(vcpu, 0))
+ 		return 1;
+ 
+ 	eax = kvm_register_read(vcpu, VCPU_REGS_RAX);
++	init_eax_val = eax;
++
++        /* set or clear flag(toggle) for cpuid(0x4FFFFFFF) */
++	if(eax == 0x4FFFFFFF){
++		if(flag_change_cpuinfo == 0)
++			flag_change_cpuinfo = 1;
++		else
++			flag_change_cpuinfo = 0;
++	}
++
+ 	ecx = kvm_register_read(vcpu, VCPU_REGS_RCX);
+ 	kvm_cpuid(vcpu, &eax, &ebx, &ecx, &edx, true);
++
++        /* If flag is set(return fake vendor_id enabled) set the fake values for vendor_id */
++	if(flag_change_cpuinfo == 1 && init_eax_val == 0){
++		ebx = 0x45504d43;
++		ecx = 0x45504d43;
++		edx = 0x3338325f;
++	}
++
+ 	kvm_register_write(vcpu, VCPU_REGS_RAX, eax);
+ 	kvm_register_write(vcpu, VCPU_REGS_RBX, ebx);
+ 	kvm_register_write(vcpu, VCPU_REGS_RCX, ecx);
