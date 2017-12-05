@@ -1,0 +1,176 @@
+diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
+index 95a0160..2dfb97d 100644
+--- a/arch/x86/kvm/vmx.c
++++ b/arch/x86/kvm/vmx.c
+@@ -8172,6 +8172,7 @@ static int (*const kvm_vmx_exit_handlers[])(struct kvm_vcpu *vcpu) = {
+ 	[EXIT_REASON_PREEMPTION_TIMER]	      = handle_preemption_timer,
+ };
+ 
++
+ static const int kvm_vmx_max_exit_handlers =
+ 	ARRAY_SIZE(kvm_vmx_exit_handlers);
+ 
+@@ -8756,14 +8757,109 @@ static void dump_vmcs(void)
+ }
+ 
+ /*
++ * Structure to store the information for an exit
++ */
++struct exits_info {
++	const char *name;
++	long int number_of_exits;
++	u64 max_time;
++	u64 min_time;
++	u64 total_time;
++};
++
++/*
++ * Stores total number of exits to show the statistics
++ */
++long int total_exits = 0;
++
++/*
++ * List of exits taken from /linux/arch/x86/include/uapi/asm/vmx.h
++ * The gaps in between the exits are filled by null values in the array
++ */
++struct exits_info exits_list[65] = {
++	{"NMI EXCEPTION", 0 , 0, 0, 0},
++	{"EXTERNAL INTERRUPT", 0, 0, 0, 0},
++	{"TRIPLE FAULT", 0, 0, 0, 0},
++	{"NULL", 0, 0, 0, 0},
++	{"NULL", 0, 0, 0, 0},
++	{"NULL", 0, 0, 0, 0},
++	{"NULL", 0, 0, 0, 0},
++	{"PENDING INTERRUPT", 0, 0, 0, 0},
++	{"NMI WINDOW", 0, 0, 0, 0},
++	{"TASK SWITCH", 0, 0, 0, 0},
++	{"CPUID", 0, 0, 0, 0},
++	{"NULL", 0, 0, 0, 0},
++	{"HLT", 0, 0, 0, 0},
++	{"INVD", 0, 0, 0, 0},
++	{"INVLPG", 0, 0, 0, 0},
++	{"RDPMC", 0, 0, 0, 0},
++	{"RDTSC", 0, 0, 0, 0},
++	{"NULL", 0, 0, 0, 0},
++	{"VMCALL", 0, 0, 0, 0},
++	{"VMCLEAR", 0, 0, 0, 0},
++	{"VMLAUNCH", 0, 0, 0, 0},
++	{"VMPTRLD", 0, 0, 0, 0},
++	{"VMPTRST", 0, 0, 0, 0},
++	{"VMREAD", 0, 0, 0, 0},
++	{"VMRESUME", 0, 0, 0, 0},
++	{"VMWRITE", 0, 0, 0, 0},
++	{"VMOFF", 0, 0, 0, 0},
++	{"VMON", 0, 0, 0, 0},
++	{"CR ACCESS", 0, 0, 0, 0},
++	{"DR ACCESS", 0, 0, 0, 0},
++	{"IO INSTRUCTION", 0, 0, 0, 0},
++	{"MSR READ", 0, 0, 0, 0},
++	{"MSR WRITE", 0, 0, 0, 0},
++	{"INVALID STATE", 0, 0, 0, 0},
++	{"MSR LOAD FAIL", 0, 0, 0, 0},
++	{"NULL", 0, 0, 0, 0},
++	{"MWAIT INSTRUCTION", 0, 0, 0, 0},
++	{"MONITOR TRAP FLAG", 0, 0, 0, 0},
++	{"NULL", 0, 0, 0, 0},
++	{"MONITOR INSTRUCTION", 0, 0, 0, 0},
++	{"PAUSE INSTRUCTION", 0, 0, 0, 0},
++	{"MCE DURING VMENTRY", 0, 0, 0, 0},
++	{"NULL", 0, 0, 0, 0},
++	{"TPR BELOW THRESHOLD", 0, 0, 0, 0},
++	{"APIC ACCESS", 0, 0, 0, 0},
++	{"EOI INDUCED", 0, 0, 0, 0},
++	{"GDTR IDTR", 0, 0, 0, 0},
++	{"LDTR TR", 0, 0, 0, 0},
++	{"EPT VIOLATION", 0, 0, 0, 0},
++	{"EPT MISCONFIG", 0, 0, 0, 0},
++	{"INVEPT", 0, 0, 0, 0},
++	{"RDTSCP", 0, 0, 0, 0},
++	{"PREEMPTION TIMER", 0, 0, 0, 0},
++	{"INVVPID", 0, 0, 0, 0},
++	{"WBINVD", 0, 0, 0, 0},
++	{"XSETBV", 0, 0, 0, 0},
++	{"APIC WRITE", 0, 0, 0, 0},
++	{"RDRAND", 0, 0, 0, 0},
++	{"INVPCID", 0, 0, 0, 0},
++	{"VMFUNC", 0, 0, 0, 0},
++	{"ENCLS", 0, 0, 0, 0},
++	{"RDSEED", 0, 0, 0, 0},
++	{"PML FULL", 0, 0, 0, 0},
++	{"XSAVES", 0, 0, 0, 0},
++	{"XRSTORS", 0, 0, 0, 0}
++};
++
++/*
+  * The guest has exited.  See if we can fix it or if we need userspace
+  * assistance.
+  */
+ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
+ {
++	u64 start_time = rdtsc();
++	u64 end_time;
++	u64 delta_time;
++	int exit_return;
++	u64 avg = 0;
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	u32 exit_reason = vmx->exit_reason;
+ 	u32 vectoring_info = vmx->idt_vectoring_info;
++	int i = 0;
++	u64 total_cpu_time = 0;
+ 
+ 	trace_kvm_exit(exit_reason, vcpu, KVM_ISA_VMX);
+ 
+@@ -8826,8 +8922,51 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
+ 	}
+ 
+ 	if (exit_reason < kvm_vmx_max_exit_handlers
+-	    && kvm_vmx_exit_handlers[exit_reason])
+-		return kvm_vmx_exit_handlers[exit_reason](vcpu);
++	    && kvm_vmx_exit_handlers[exit_reason]){
++
++		//Increment the total exit counter
++		total_exits++;
++
++		//Increment the counter for particular exit
++		exits_list[exit_reason].number_of_exits++;
++
++		exit_return = kvm_vmx_exit_handlers[exit_reason](vcpu);
++
++		end_time = rdtsc();
++
++		//Calculate time required to handle the exit
++		delta_time = end_time - start_time;
++
++		if (exits_list[exit_reason].max_time == 0 && exits_list[exit_reason].min_time == 0){
++			exits_list[exit_reason].max_time = delta_time;
++			exits_list[exit_reason].min_time = delta_time;
++			exits_list[exit_reason].total_time = delta_time;
++		}
++		else{
++			if (delta_time > exits_list[exit_reason].max_time)
++				exits_list[exit_reason].max_time = delta_time;
++			if (delta_time < exits_list[exit_reason].min_time)
++				exits_list[exit_reason].min_time = delta_time;
++			exits_list[exit_reason].total_time = exits_list[exit_reason].total_time + delta_time;
++		}
++
++		//Show the statistics for exits after every 1000 exits
++		if(total_exits % 1000 == 0){
++			printk("\n\n********************************************************************************************************************************************************\n");
++			printk("*******************************************************  Exit Statistics  ******************************************************************************\n");
++			for(i=0; i<65; i++){
++				if(exits_list[i].number_of_exits != 0){
++					avg = exits_list[i].total_time / exits_list[i].number_of_exits;
++					total_cpu_time = total_cpu_time + exits_list[i].total_time;
++					printk("%s: Exits - %ld\tMax CPU Cycle - %llu\t Min CPU Cycle - %llu\t Avg CPU Cycle - %llu\n", exits_list[i].name, exits_list[i].number_of_exits,
++						exits_list[i].max_time, exits_list[i].min_time, avg);
++				}
++			}
++			printk("\nTotal CPU cycles processing all exits : %llu\n", total_cpu_time);
++		}
++
++		return exit_return;
++	}
+ 	else {
+ 		vcpu_unimpl(vcpu, "vmx: unexpected exit reason 0x%x\n",
+ 				exit_reason);
